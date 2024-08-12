@@ -10,6 +10,7 @@ import csv
 import threading
 import requests
 import re
+import hmac
 import html
 import hashlib
 
@@ -30,6 +31,7 @@ from modules.config import retrieve_proxy, hide_history_when_not_logged_in
 
 if TYPE_CHECKING:
     from typing import TypedDict
+    from .models.base_model import BaseLLMModel
 
     class DataframeData(TypedDict):
         headers: List[str]
@@ -303,6 +305,7 @@ def escape_markdown(text):
     """
     escape_chars = {
         # ' ': '&nbsp;',
+        '"': "&quot;",
         "_": "&#95;",
         "*": "&#42;",
         "[": "&#91;",
@@ -361,6 +364,9 @@ def construct_text(role, text):
 
 def construct_user(text):
     return construct_text("user", text)
+
+def construct_image(path):
+    return construct_text("image", path)
 
 
 def construct_system(text):
@@ -453,7 +459,7 @@ def get_file_names_by_pinyin(dir, filetypes=[".json"]):
 
 def get_file_names_dropdown_by_pinyin(dir, filetypes=[".json"]):
     files = get_file_names_by_pinyin(dir, filetypes)
-    return gr.Dropdown.update(choices=files)
+    return gr.Dropdown(choices=files)
 
 
 def get_file_names_by_last_modified_time(dir, filetypes=[".json"]):
@@ -483,14 +489,14 @@ def get_first_history_name(user_name=""):
 
 def get_history_list(user_name=""):
     history_names = get_history_names(user_name)
-    return gr.Radio.update(choices=history_names)
+    return gr.Radio(choices=history_names)
 
 
 def init_history_list(user_name="", prepend=None):
     history_names = get_history_names(user_name)
     if prepend is not None and prepend not in history_names:
         history_names.insert(0, prepend)
-    return gr.Radio.update(
+    return gr.Radio(
         choices=history_names, value=history_names[0] if history_names else ""
     )
 
@@ -524,7 +530,7 @@ def load_template(filename, mode=0):
         return {row[0]: row[1] for row in lines}
     else:
         choices = sorted_by_pinyin([row[0] for row in lines])
-        return {row[0]: row[1] for row in lines}, gr.Dropdown.update(choices=choices)
+        return {row[0]: row[1] for row in lines}, gr.Dropdown(choices=choices)
 
 
 def get_template_names():
@@ -535,7 +541,7 @@ def get_template_names():
 def get_template_dropdown():
     logging.debug("获取模板下拉菜单")
     template_names = get_template_names()
-    return gr.Dropdown.update(choices=template_names)
+    return gr.Dropdown(choices=template_names)
 
 
 def get_template_content(templates, selection, original_system_prompt):
@@ -664,13 +670,13 @@ def find_n(lst, max_num):
 
 def start_outputing():
     logging.debug("显示取消按钮，隐藏发送按钮")
-    return gr.Button.update(visible=False), gr.Button.update(visible=True)
+    return gr.Button(visible=False), gr.Button(visible=True)
 
 
 def end_outputing():
     return (
-        gr.Button.update(visible=True),
-        gr.Button.update(visible=False),
+        gr.Button(visible=True),
+        gr.Button(visible=False),
     )
 
 
@@ -686,8 +692,8 @@ def transfer_input(inputs):
     return (
         inputs,
         gr.update(value=""),
-        gr.Button.update(visible=False),
-        gr.Button.update(visible=True),
+        gr.Button(visible=False),
+        gr.Button(visible=True),
     )
 
 
@@ -699,10 +705,10 @@ def update_chuanhu():
     if update_status == "success":
         logging.info("Successfully updated, restart needed")
         status = '<span id="update-status" class="hideK">success</span>'
-        return gr.Markdown.update(value=i18n("更新成功，请重启本程序") + status)
+        return gr.Markdown(value=i18n("更新成功，请重启本程序") + status)
     else:
         status = '<span id="update-status" class="hideK">failure</span>'
-        return gr.Markdown.update(
+        return gr.Markdown(
             value=i18n(
                 "更新失败，请尝试[手动更新](https://github.com/GaiZhenbiao/ChuanhuChatGPT/wiki/使用教程#手动更新)"
             )
@@ -780,7 +786,7 @@ def toggle_like_btn_visibility(selected_model_name):
 
 
 def get_corresponding_file_type_by_model_name(selected_model_name):
-    if selected_model_name in ["xmchat", "GPT4 Vision"]:
+    if selected_model_name in ["xmchat", "GPT4 Turbo"]:
         return ["image"]
     else:
         return [".pdf", ".docx", ".pptx", ".epub", ".xlsx", ".txt", "text"]
@@ -831,16 +837,25 @@ def beautify_err_msg(err_msg):
 
 def auth_from_conf(username, password):
     try:
-        with open("config.json", encoding="utf-8") as f:
+        with open("config.json", "r", encoding="utf-8") as f:
             conf = json.load(f)
-        usernames, passwords = [i[0] for i in conf["users"]], [
-            i[1] for i in conf["users"]
-        ]
-        if username in usernames:
-            if passwords[usernames.index(username)] == password:
-                return True
+        # Create a dictionary with usernames as keys and passwords as values
+        user_dict = {user[0]: user[1] for user in conf["users"]}
+
+        # Constant-time check if the username exists and the password matches
+        user_password = user_dict.get(username)
+        if user_password is not None:
+            return hmac.compare_digest(user_password, password)
         return False
-    except:
+    except FileNotFoundError:
+        print("Configuration file not found.")
+        return False
+    except json.JSONDecodeError:
+        print("Error decoding JSON.")
+        return False
+    except Exception as e:
+        # General exception handling; consider logging this properly
+        print(f"An unexpected error occurred: {str(e)}")
         return False
 
 
@@ -864,9 +879,9 @@ def myprint(**args):
 
 def replace_special_symbols(string, replace_string=" "):
     # 定义正则表达式，匹配所有特殊符号
-    pattern = r"[!@#$%^&*()<>?/\|}{~:]"
+    pattern = r"[\\/\'\"!@#$%^&*()<>?/\|}{~:]"
 
-    new_string = re.sub(pattern, replace_string, string)
+    new_string = re.sub(pattern, replace_string, string).strip()
 
     return new_string
 
@@ -1408,7 +1423,73 @@ def setup_wizard():
         print(colorama.Back.GREEN + i18n("设置完成。现在请重启本程序。") + colorama.Style.RESET_ALL)
         exit()
 
+
 def reboot_chuanhu():
     import sys
     print(colorama.Back.GREEN + i18n("正在尝试重启...") + colorama.Style.RESET_ALL)
     os.execl(sys.executable, sys.executable, *sys.argv)
+
+
+def setPlaceholder(model_name: str | None = "", model: BaseLLMModel | None = None):
+    from .webui import get_html
+    logo_class, slogan_class, question_class = "", "", ""
+    model_logo, model_logo_round, model_slogan, model_question_1, model_question_2, model_question_3, model_question_4 = "", "", "", "", "", "", ""
+
+    if model is None:
+        try:
+            model_logo = MODEL_METADATA[model_name]["placeholder"]["logo"]
+        except:
+            logo_class = "hideK"
+        try:
+            model_logo_round = MODEL_METADATA[model_name]["placeholder"]["logo_rounded"]
+        except:
+            pass
+        try:
+            model_slogan = i18n(MODEL_METADATA[model_name]["placeholder"]["slogan"])
+        except:
+            slogan_class = "hideK"
+        try:
+            model_question_1 = i18n(MODEL_METADATA[model_name]["placeholder"]["question_1"])
+            model_question_2 = i18n(MODEL_METADATA[model_name]["placeholder"]["question_2"])
+            model_question_3 = i18n(MODEL_METADATA[model_name]["placeholder"]["question_3"])
+            model_question_4 = i18n(MODEL_METADATA[model_name]["placeholder"]["question_4"])
+        except:
+            question_class = "hideK"
+    else:
+        try:
+            model_logo = model.placeholder["logo"]
+        except:
+            logo_class = "hideK"
+        try:
+            model_logo_round = model.placeholder["logo_rounded"]
+        except:
+            pass
+        try:
+            model_slogan = i18n(model.placeholder["slogan"])
+        except:
+            slogan_class = "hideK"
+        try:
+            model_question_1 = i18n(model.placeholder["question_1"])
+            model_question_2 = i18n(model.placeholder["question_2"])
+            model_question_3 = i18n(model.placeholder["question_3"])
+            model_question_4 = i18n(model.placeholder["question_4"])
+        except:
+            question_class = "hideK"
+
+    if logo_class == "hideK" and slogan_class == "hideK" and question_class == "hideK":
+        return ""
+    else:
+        # 除非明确指定为 squared 或 false 等，否则默认为圆角
+        if model_logo_round.lower().strip() not in ["square", "squared", "false", "0", "no", "off"]:
+            logo_class += " rounded"
+        return get_html("chatbot_placeholder.html").format(
+            chatbot_ph_logo = model_logo,
+            chatbot_ph_slogan = model_slogan,
+            chatbot_ph_question_1 = model_question_1,
+            chatbot_ph_question_2 = model_question_2,
+            chatbot_ph_question_3 = model_question_3,
+            chatbot_ph_question_4 = model_question_4,
+            chatbot_ph_logo_class = logo_class,
+            chatbot_ph_slogan_class = slogan_class,
+            chatbot_ph_question_class = question_class
+        )

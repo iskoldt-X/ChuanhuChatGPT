@@ -17,8 +17,7 @@ from .base_model import BaseLLMModel
 
 class GoogleGeminiClient(BaseLLMModel):
     def __init__(self, model_name, api_key, user_name="") -> None:
-        super().__init__(model_name=model_name, user=user_name)
-        self.api_key = api_key
+        super().__init__(model_name=model_name, user=user_name, config={"api_key": api_key})
         if "vision" in model_name.lower():
             self.multimodal = True
         else:
@@ -51,7 +50,7 @@ class GoogleGeminiClient(BaseLLMModel):
             else:
                 construct_index(self.api_key, file_src=files)
                 status = i18n("索引构建完成")
-                return gr.Files.update(), chatbot, status
+                return gr.update(), chatbot, status
 
     def get_answer_at_once(self):
         genai.configure(api_key=self.api_key)
